@@ -40,6 +40,14 @@ except Exception:  # pragma: no cover
 
 import gsv_utils
 
+try:
+    from . import render_hooks  # type: ignore
+except Exception:  # pragma: no cover
+    try:
+        import render_hooks  # type: ignore
+    except Exception:  # pragma: no cover
+        render_hooks = None  # type: ignore
+
 
 if QtWidgets is None:
     class ScreensManagerPanel(object):  # type: ignore[misc]
@@ -108,15 +116,18 @@ else:
             self.apply_btn = QtWidgets.QPushButton("Apply to GSV", self)
             self.groups_btn = QtWidgets.QPushButton("Ensure VariableGroups", self)
             self.switch_btn = QtWidgets.QPushButton("Create VariableSwitch", self)
+            self.wrap_btn = QtWidgets.QPushButton("Lock Write node to Option", self)
             self.apply_btn.setToolTip("Create/update the global screens list and default value. Also ensures screen sets.")
             self.groups_btn.setToolTip("Create a VariableGroup per screen (screen_<name>) if missing.")
             self.switch_btn.setToolTip("Create a VariableSwitch named 'ScreenSwitch' and inputs for every screen.")
+            self.wrap_btn.setToolTip("Insert a VariableGroup upstream of the selected Write or publishable Group, wiring it to the current screen.")
 
             # Primary action emphasized on the left; secondary actions grouped to the right
             btn_row.addWidget(self.apply_btn, 2)
             btn_row.addStretch(1)
             btn_row.addWidget(self.groups_btn)
             btn_row.addWidget(self.switch_btn)
+            btn_row.addWidget(self.wrap_btn)
             self.apply_btn.setDefault(True)
 
             layout.addLayout(form)
@@ -128,6 +139,7 @@ else:
             self.apply_btn.clicked.connect(self._on_apply)
             self.groups_btn.clicked.connect(self._on_groups)
             self.switch_btn.clicked.connect(self._on_switch)
+            self.wrap_btn.clicked.connect(self._on_wrap)
             # Change root selector immediately when user picks a value
             self.default_combo.currentTextChanged.connect(self._on_default_changed)
 
@@ -293,64 +305,65 @@ else:
                 gsv_utils.create_variable_group(f"screen_{name}")
 
         def _on_switch(self) -> None:
-            """Create a `VariableSwitch` named `ScreenSwitch` and auto-wire Dots.
+            """Create a `VariableSwitch` wired to `__default__.screens`."""
 
-            - Reads screens from `__default__.screens` list options.
-            - Creates/positions a Dot for each screen and connects it to the
-              corresponding input index on the VariableSwitch.
-            - Forces the VariableSwitch `variable` knob to `__default__.screens`
-              and populates every input pattern with the current screen list.
-            """
             if nuke is None:
                 return
 
-            screens: List[str] = gsv_utils.get_list_options("__default__.screens")
+            screens = gsv_utils.get_list_options("__default__.screens")
             if not screens:
                 screens = self._parse_screens()
             if not screens:
+                self._warn_user("Add at least one screen before creating a VariableSwitch.")
+                return
+
+            undo = getattr(nuke, "Undo", None)
+            if undo is not None:
+                try:
+                    undo.begin("Create Screen VariableSwitch")
+                except Exception:
+                    undo = None
+
+            try:
+                try:
+                    switch = nuke.createNode("VariableSwitch", inpanel=False)
+                except Exception:
+                    switch = nuke.nodes.VariableSwitch()
+            except Exception:
+                self._warn_user("Unable to create a VariableSwitch node.")
+                if undo:
+                    try:
+                        undo.end()
+                    except Exception:
+                        pass
                 return
 
             try:
-                switch = nuke.nodes.VariableSwitch()
                 switch_name = nuke.uniqueName("ScreenSwitch")
                 switch.setName(switch_name)
+            except Exception:
+                switch_name = "ScreenSwitch"
 
-                self._force_switch_variable_knob(switch)
+            self._force_switch_variable_knob(switch)
+            self._create_switch_inputs(switch, screens, switch_name)
+            self._populate_switch_patterns(switch, screens)
 
-                try:
-                    sx = int(switch["xpos"].value())
-                    sy = int(switch["ypos"].value())
-                except Exception:
-                    sx, sy = 0, 0
-
-                spacing_y = 60
-                for idx, name in enumerate(screens):
-                    try:
-                        dot = nuke.nodes.Dot()
-                    except Exception:
-                        dot = None
-                    if dot is None:
-                        continue
-                    try:
-                        dot_name = nuke.uniqueName(f"{switch_name}_{name}_Dot")
-                        dot.setName(dot_name)
-                    except Exception:
-                        pass
-                    try:
-                        dot["xpos"].setValue(sx - 150)
-                        dot["ypos"].setValue(sy + idx * spacing_y)
-                        if "label" in dot.knobs():
-                            dot["label"].setValue(name)
-                    except Exception:
-                        pass
-                    try:
-                        switch.setInput(idx, dot)
-                    except Exception:
-                        pass
-
-                self._populate_switch_patterns(switch, screens)
+            try:
+                switch["label"].setValue("[value gsv]")
             except Exception:
                 pass
+
+            try:
+                switch.setSelected(True)
+                nuke.show(switch)
+            except Exception:
+                pass
+            finally:
+                if undo is not None:
+                    try:
+                        undo.end()
+                    except Exception:
+                        pass
 
         def _on_default_changed(self, text: str) -> None:
             """Update the global selector `__default__.screens` to match combobox."""
@@ -361,13 +374,72 @@ else:
             except Exception:
                 pass
 
+        def _on_wrap(self) -> None:
+            """Insert a VariableGroup upstream of the selected Write/Group."""
+
+            if nuke is None or render_hooks is None:
+                return
+            helper = getattr(render_hooks, "encapsulate_write_with_variable_group", None)
+            if helper is None:
+                return
+            try:
+                helper()
+            except Exception:
+                try:
+                    nuke.message("Unable to wrap the current selection; check the Script Editor for details.")
+                except Exception:
+                    pass
+
         def _force_switch_variable_knob(self, switch: object) -> None:
             """Ensure the VariableSwitch is always driven by __default__.screens."""
 
             try:
                 switch["variable"].setValue("__default__.screens")
+                return
             except Exception:
                 pass
+            # Fallback for versions that expect the short variable name
+            try:
+                switch["variable"].setValue("screens")
+            except Exception:
+                pass
+
+        def _create_switch_inputs(self, switch: object, screens: Sequence[str], switch_name: str) -> None:
+            """Create Dot inputs for each screen and connect them to the switch."""
+
+            try:
+                sx = int(switch["xpos"].value())
+                sy = int(switch["ypos"].value())
+            except Exception:
+                sx, sy = 0, 0
+
+            spacing_y = 60
+            for idx, name in enumerate(screens):
+                try:
+                    dot = nuke.nodes.Dot()
+                except Exception:
+                    dot = None
+                if dot is None:
+                    continue
+                try:
+                    dot.setSelected(False)
+                except Exception:
+                    pass
+                try:
+                    dot_name = nuke.uniqueName(f"{switch_name}_{name}_Dot")
+                    dot.setName(dot_name)
+                except Exception:
+                    pass
+                try:
+                    dot["xpos"].setValue(sx - 150)
+                    dot["ypos"].setValue(sy + idx * spacing_y)
+                    dot["label"].setValue(name)
+                except Exception:
+                    pass
+                try:
+                    switch.setInput(idx, dot)
+                except Exception:
+                    pass
 
         def _populate_switch_patterns(self, switch: object, screens: Sequence[str]) -> None:
             """Fill every available pattern knob with the provided screen list."""
@@ -406,6 +478,16 @@ else:
                         knobs[key].setValue(str(name))
                     except Exception:
                         pass
+
+        def _warn_user(self, message: str) -> None:
+            """Display a user-facing message via Nuke if available."""
+
+            if nuke is None:
+                return
+            try:
+                nuke.message(message)
+            except Exception:
+                pass
 
 
 def set_default_screen_via_ui(name: str) -> bool:
