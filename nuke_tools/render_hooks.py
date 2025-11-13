@@ -138,9 +138,9 @@ def _ensure_group_terminals(group: object) -> None:
         return
     try:
         # Explicitly enter the group's context; VariableGroup may not support a context manager
-        group.begin()  # type: ignore[attr-defined]
+        group.begin()
         try:
-            nodes = list(nuke.allNodes(recurse=False))  # type: ignore[attr-defined]
+            nodes = list(nuke.allNodes())
             input_nodes = [node for node in nodes if node.Class() == "Input"]
             output_nodes = [node for node in nodes if node.Class() == "Output"]
 
