@@ -15,7 +15,6 @@ nuke.pluginAddPath('./nuke_tools')
 
 # Tools on NUKE_PATH
 from screens_manager import ScreensManagerPanel  # type: ignore
-from render_hooks import encapsulate_write_with_variable_group  # type: ignore
 
 
 def add_screens_manager_panel() -> Optional[object]:
@@ -39,11 +38,6 @@ try:
         nuke.menu('Nuke').addCommand(
             'BCN Multishot/Screens Manager',
             add_screens_manager_panel,
-        )
-        # Write helpers
-        nuke.menu('Nuke').addCommand(
-            'BCN Multishot/Wrap Node in Variable Group',
-            encapsulate_write_with_variable_group,
         )
 except Exception:
     pass

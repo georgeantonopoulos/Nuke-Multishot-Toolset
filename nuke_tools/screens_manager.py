@@ -298,9 +298,8 @@ else:
             - Reads screens from `__default__.screens` list options.
             - Creates/positions a Dot for each screen and connects it to the
               corresponding input index on the VariableSwitch.
-            - Populates the VariableSwitch `variable` to "screens" and fills
-              its input patterns with the screen names (best-effort across
-              potential knob layouts).
+            - Forces the VariableSwitch `variable` knob to `__default__.screens`
+              and populates every input pattern with the current screen list.
             """
             if nuke is None:
                 return
@@ -316,11 +315,7 @@ else:
                 switch_name = nuke.uniqueName("ScreenSwitch")
                 switch.setName(switch_name)
 
-                try:
-                    if "variable" in switch.knobs():
-                        switch["variable"].setValue("__default__.screens")
-                except Exception:
-                    pass
+                self._force_switch_variable_knob(switch)
 
                 try:
                     sx = int(switch["xpos"].value())
@@ -353,18 +348,7 @@ else:
                     except Exception:
                         pass
 
-                for idx, name in enumerate(screens):
-                    try:
-                        switch["patterns"].setValueAt(name, idx)
-                        continue
-                    except Exception:
-                        pass
-                    try:
-                        key = f"i{idx}"
-                        if key in switch.knobs():
-                            switch[key].setValue(name)
-                    except Exception:
-                        pass
+                self._populate_switch_patterns(switch, screens)
             except Exception:
                 pass
 
@@ -376,6 +360,52 @@ else:
                 gsv_utils.set_value("__default__.screens", text)
             except Exception:
                 pass
+
+        def _force_switch_variable_knob(self, switch: object) -> None:
+            """Ensure the VariableSwitch is always driven by __default__.screens."""
+
+            try:
+                switch["variable"].setValue("__default__.screens")
+            except Exception:
+                pass
+
+        def _populate_switch_patterns(self, switch: object, screens: Sequence[str]) -> None:
+            """Fill every available pattern knob with the provided screen list."""
+
+            if not screens:
+                return
+
+            patterns_knob = None
+            try:
+                patterns_knob = switch["patterns"]
+            except Exception:
+                patterns_knob = None
+
+            if patterns_knob is not None:
+                text = "\n".join(str(name) for name in screens)
+                try:
+                    patterns_knob.setValue(text)
+                    return
+                except Exception:
+                    pass
+                for idx, name in enumerate(screens):
+                    try:
+                        patterns_knob.setValueAt(str(name), idx)
+                    except Exception:
+                        pass
+
+            try:
+                knobs = switch.knobs()
+            except Exception:
+                knobs = {}
+
+            for idx, name in enumerate(screens):
+                key = f"i{idx}"
+                if key in knobs:
+                    try:
+                        knobs[key].setValue(str(name))
+                    except Exception:
+                        pass
 
 
 def set_default_screen_via_ui(name: str) -> bool:
@@ -412,4 +442,3 @@ def set_default_screen_via_ui(name: str) -> bool:
 
 
 __all__ = ["ScreensManagerPanel", "set_default_screen_via_ui"]
-
