@@ -137,7 +137,9 @@ def _ensure_group_terminals(group: object) -> None:
     if nuke is None:
         return
     try:
-        with group:
+        # Explicitly enter the group's context; VariableGroup may not support a context manager
+        group.begin()  # type: ignore[attr-defined]
+        try:
             nodes = list(nuke.allNodes(recurse=False))  # type: ignore[attr-defined]
             input_nodes = [node for node in nodes if node.Class() == "Input"]
             output_nodes = [node for node in nodes if node.Class() == "Output"]
@@ -146,6 +148,7 @@ def _ensure_group_terminals(group: object) -> None:
                 inp = input_nodes[0]
             else:
                 try:
+                    # create Input inside the group
                     inp = nuke.nodes.Input()
                 except Exception as exc:
                     _log_exception("create Input node", exc)
@@ -160,6 +163,7 @@ def _ensure_group_terminals(group: object) -> None:
                 out = output_nodes[0]
             else:
                 try:
+                    # create Output inside the group
                     out = nuke.nodes.Output()
                 except Exception as exc:
                     _log_exception("create Output node", exc)
@@ -174,8 +178,13 @@ def _ensure_group_terminals(group: object) -> None:
                 out.setInput(0, inp)
             except Exception as exc:
                 _log_exception("connect Output to Input", exc)
+        finally:
+            try:
+                group.end()  # type: ignore[attr-defined]
+            except Exception as exc:
+                _log_exception("group.end()", exc)
     except Exception as exc:
-        _log_exception("ensure_group_terminals", exc)
+        _log_exception("ensure_group_terminals(group.begin)", exc)
 
 
 def _set_group_label(group: object) -> None:
