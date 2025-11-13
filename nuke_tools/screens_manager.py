@@ -94,7 +94,7 @@ else:
             root_layout.addWidget(header)
 
             hero_copy = QtWidgets.QLabel(
-                "Curate screen presets, preview them in VariableSwitch nodes, and keep writes scoped with a single click."
+                "Create variations, generate switches, lock Outputs to selected Option."
             )
             hero_copy.setWordWrap(True)
             hero_copy.setStyleSheet("color: #d6d6d6; font-size: 11px;")
@@ -117,7 +117,7 @@ else:
             self.default_combo = QtWidgets.QComboBox(self)
             self.default_combo.setObjectName("sm_default_screen")
             self.default_combo.setToolTip("Pick the default/current screen (writes also use this unless assigned).")
-            form.addRow("Default:", self.default_combo)
+            form.addRow("Current Selection:", self.default_combo)
             form_group_layout.addLayout(form)
 
             self.screen_summary = QtWidgets.QLabel("No screens configured.")
@@ -211,7 +211,7 @@ else:
             """Give each action button a consistent style."""
             palette = {
                 "primary": ("#2f7bf2", "#2462c1"),
-                "accent": ("#46b37b", "#2f7c55"),
+                "accent": ("#b346", "#2f7c55"),
                 "secondary": ("#3a3f4b", "#2b2f38"),
             }
             normal, pressed = palette.get(role, palette["secondary"])
