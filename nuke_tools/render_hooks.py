@@ -117,6 +117,30 @@ def _rewire_primary_input(group: object, target: object) -> None:
         pass
 
 
+def _ensure_group_terminals(group: object) -> None:
+    """Ensure the VariableGroup contains Input/Output nodes for connectivity."""
+
+    if nuke is None:
+        return
+    try:
+        with group:
+            existing = {node.Class(): node for node in nuke.allNodes(recurse=False)}  # type: ignore[attr-defined]
+            if "Input" not in existing:
+                inp = nuke.nodes.Input(name="Input1")
+                try:
+                    inp.setName("Input1")
+                except Exception:
+                    pass
+            if "Output" not in existing:
+                out = nuke.nodes.Output(name="Output1")
+                try:
+                    out.setName("Output1")
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
 def _set_group_label(group: object) -> None:
     try:
         group["label"].setValue("[value gsv]")
@@ -188,6 +212,7 @@ def encapsulate_write_with_variable_group(node: Optional[object] = None) -> Opti
         except Exception:
             pass
 
+        _ensure_group_terminals(group)
         _position_group(group, target)
         _rewire_primary_input(group, target)
         _set_group_label(group)
