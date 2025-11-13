@@ -143,7 +143,7 @@ else:
             self.apply_btn = QtWidgets.QPushButton("Sync Screens to GSV", self)
             self.groups_btn = QtWidgets.QPushButton("Build VariableGroups", self)
             self.switch_btn = QtWidgets.QPushButton("Create VariableSwitch", self)
-            self.wrap_btn = QtWidgets.QPushButton("Wrap Selected Write", self)
+            self.wrap_btn = QtWidgets.QPushButton("Lock Write node to Option", self)
 
             self.apply_btn.setToolTip("Create/update the global screens list and default value. Also ensures screen sets.")
             self.groups_btn.setToolTip("Create a VariableGroup per screen (screen_<name>) if missing.")
@@ -337,8 +337,7 @@ else:
                 this_dir = os.path.dirname(os.path.abspath(__file__))
                 root_dir = os.path.dirname(this_dir)
                 logo_candidates = [
-                    os.path.join(root_dir, "switch_manager_logo_black.png"),
-                    os.path.join(root_dir, "switch_manager_logo.png"),
+                    os.path.join(root_dir, "switch_manager_logo_alpha.png")
                 ]
                 logo_path = next((p for p in logo_candidates if os.path.exists(p)), None)
                 if logo_path is None:
