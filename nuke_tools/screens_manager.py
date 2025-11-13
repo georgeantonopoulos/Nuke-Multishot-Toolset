@@ -568,7 +568,13 @@ else:
             except Exception:
                 sx, sy = 0, 0
 
-            spacing_y = 60
+            # Layout: dots above the switch, left-to-right by input index
+            spacing_x = 120
+            offset_y = 120
+            count = len(screens)
+            # Center the row around the switch's X
+            start_x = sx - ((count - 1) * spacing_x) // 2 if count > 0 else sx
+            target_y = sy - offset_y
             for idx, name in enumerate(screens):
                 try:
                     dot = nuke.nodes.Dot()
@@ -586,8 +592,9 @@ else:
                 except Exception:
                     pass
                 try:
-                    dot["xpos"].setValue(sx - 150)
-                    dot["ypos"].setValue(sy + idx * spacing_y)
+                    dot_x = start_x + idx * spacing_x
+                    dot["xpos"].setValue(dot_x)
+                    dot["ypos"].setValue(target_y)
                     dot["label"].setValue(name)
                 except Exception:
                     pass
