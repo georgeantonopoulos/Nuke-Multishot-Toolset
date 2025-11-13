@@ -3,3 +3,4 @@ AGENTS.md
 __pycache__/
 *.pyc
 
+copy_to_studio.sh
