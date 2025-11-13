@@ -28,6 +28,20 @@ except Exception:  # pragma: no cover
         screens_manager = None  # type: ignore
 
 
+def _log_exception(context: str, exc: Exception) -> None:
+    """Log exceptions to the Nuke script editor or stdout."""
+
+    message = f"[render_hooks] {context}: {exc}"
+    try:
+        if nuke is not None and hasattr(nuke, "tprint"):
+            nuke.tprint(message)  # type: ignore[attr-defined]
+        else:
+            print(message)  # noqa: T201
+    except Exception:
+        # Fall back to stdout if the Nuke print helper fails
+        print(message)  # noqa: T201
+
+
 def _selected_panel_screen() -> Optional[str]:
     """Return the current screen selected in the Screens Manager UI."""
 
@@ -124,21 +138,44 @@ def _ensure_group_terminals(group: object) -> None:
         return
     try:
         with group:
-            existing = {node.Class(): node for node in nuke.allNodes(recurse=False)}  # type: ignore[attr-defined]
-            if "Input" not in existing:
-                inp = nuke.nodes.Input(name="Input1")
+            nodes = list(nuke.allNodes(recurse=False))  # type: ignore[attr-defined]
+            input_nodes = [node for node in nodes if node.Class() == "Input"]
+            output_nodes = [node for node in nodes if node.Class() == "Output"]
+
+            if input_nodes:
+                inp = input_nodes[0]
+            else:
                 try:
-                    inp.setName("Input1")
-                except Exception:
-                    pass
-            if "Output" not in existing:
-                out = nuke.nodes.Output(name="Output1")
+                    inp = nuke.nodes.Input()
+                except Exception as exc:
+                    _log_exception("create Input node", exc)
+                    return
+
+            try:
+                inp.setName("Input1")
+            except Exception as exc:
+                _log_exception("rename Input node", exc)
+
+            if output_nodes:
+                out = output_nodes[0]
+            else:
                 try:
-                    out.setName("Output1")
-                except Exception:
-                    pass
-    except Exception:
-        pass
+                    out = nuke.nodes.Output()
+                except Exception as exc:
+                    _log_exception("create Output node", exc)
+                    return
+
+            try:
+                out.setName("Output1")
+            except Exception as exc:
+                _log_exception("rename Output node", exc)
+
+            try:
+                out.setInput(0, inp)
+            except Exception as exc:
+                _log_exception("connect Output to Input", exc)
+    except Exception as exc:
+        _log_exception("ensure_group_terminals", exc)
 
 
 def _set_group_label(group: object) -> None:
