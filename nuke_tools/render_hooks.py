@@ -78,7 +78,22 @@ def _position_group(group: object, target: object) -> None:
     try:
         tx = int(target["xpos"].value())
         ty = int(target["ypos"].value())
-        group["xpos"].setValue(tx - 150)
+        group["xpos"].setValue(tx)
+
+        upstream = None
+        try:
+            upstream = target.input(0)
+        except Exception:
+            upstream = None
+
+        if upstream is not None:
+            try:
+                uy = int(upstream["ypos"].value())
+                group["ypos"].setValue(int((ty + uy) / 2))
+                return
+            except Exception:
+                pass
+
         group["ypos"].setValue(ty)
     except Exception:
         pass
@@ -93,11 +108,11 @@ def _rewire_primary_input(group: object, target: object) -> None:
     except Exception:
         upstream = None
     try:
-        target.setInput(0, group)
+        group.setInput(0, upstream)
     except Exception:
         pass
     try:
-        group.setInput(0, upstream)
+        target.setInput(0, group)
     except Exception:
         pass
 

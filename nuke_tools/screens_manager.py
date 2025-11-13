@@ -349,7 +349,7 @@ else:
             self._populate_switch_patterns(switch, screens)
 
             try:
-                switch["label"].setValue("[value gsv]")
+                switch["label"].setValue("[value variable]")
             except Exception:
                 pass
 
