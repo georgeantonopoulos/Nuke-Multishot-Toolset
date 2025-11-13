@@ -211,7 +211,7 @@ else:
             """Give each action button a consistent style."""
             palette = {
                 "primary": ("#2f7bf2", "#2462c1"),
-                "accent": ("#b346", "#2f7c55"),
+                "accent": ("#a68a00", "#2f7c55"),
                 "secondary": ("#3a3f4b", "#2b2f38"),
             }
             normal, pressed = palette.get(role, palette["secondary"])
@@ -457,7 +457,13 @@ else:
         def _on_groups(self) -> None:
             """Ensure VariableGroup nodes exist for each screen name."""
             for name in self._parse_screens():
-                gsv_utils.create_variable_group(f"screen_{name}")
+                grp = gsv_utils.create_variable_group(f"screen_{name}")
+                # Lock the group's local scope to this option so it evaluates correctly
+                try:
+                    if grp is not None:
+                        grp["gsv"].setGsvValue("__default__.screens", str(name))
+                except Exception:
+                    pass
 
         def _on_switch(self) -> None:
             """Create a `VariableSwitch` wired to `__default__.screens`."""
