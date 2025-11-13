@@ -84,64 +84,215 @@ else:
             self._install_gsv_callback()
             
         def _build_ui(self) -> None:
-            """Build and wire the minimal Qt UI."""
-            layout = QtWidgets.QVBoxLayout()
+            """Build and wire an artist-friendly Qt UI."""
+            self.setMinimumWidth(420)
+            root_layout = QtWidgets.QVBoxLayout(self)
+            root_layout.setContentsMargins(12, 12, 12, 12)
+            root_layout.setSpacing(10)
 
-            # Optional top banner logo (best-effort; ignore errors quietly)
-            self.logo_label = QtWidgets.QLabel(self)
-            self.logo_label.setAlignment(QtCore.Qt.AlignCenter)
-            self.logo_label.setObjectName("switchManagerLogo")
-            self.logo_label.setMinimumHeight(72)
-            self.logo_label.setMaximumHeight(128)
-            self._install_logo_pixmap()
-            layout.addWidget(self.logo_label)
+            header = self._build_header()
+            root_layout.addWidget(header)
 
-            # Fields area – use a simple form layout for better alignment
+            hero_copy = QtWidgets.QLabel(
+                "Curate screen presets, preview them in VariableSwitch nodes, and keep writes scoped with a single click."
+            )
+            hero_copy.setWordWrap(True)
+            hero_copy.setStyleSheet("color: #d6d6d6; font-size: 11px;")
+            root_layout.addWidget(hero_copy)
+
+            # Screen configuration group
+            form_group = QtWidgets.QGroupBox("Screen Setup")
+            form_group.setObjectName("sm_setup_group")
+            form_group_layout = QtWidgets.QVBoxLayout(form_group)
+            form_group_layout.setContentsMargins(10, 10, 10, 10)
+
             form = QtWidgets.QFormLayout()
+            form.setLabelAlignment(QtCore.Qt.AlignRight)
 
-            # Screens input
             self.screens_edit = QtWidgets.QLineEdit(self)
             self.screens_edit.setPlaceholderText("Comma-separated screen names, e.g. Moxy,Godzilla,NYD400")
             self.screens_edit.setToolTip("Enter a list of screen names. Duplicates will be removed.")
             form.addRow("Screens:", self.screens_edit)
 
-            # Default selector
             self.default_combo = QtWidgets.QComboBox(self)
             self.default_combo.setObjectName("sm_default_screen")
             self.default_combo.setToolTip("Pick the default/current screen (writes also use this unless assigned).")
-            form.addRow("Default screen:", self.default_combo)
+            form.addRow("Default:", self.default_combo)
+            form_group_layout.addLayout(form)
 
-            # Buttons
-            btn_row = QtWidgets.QHBoxLayout()
-            self.apply_btn = QtWidgets.QPushButton("Apply to GSV", self)
-            self.groups_btn = QtWidgets.QPushButton("Ensure VariableGroups", self)
+            self.screen_summary = QtWidgets.QLabel("No screens configured.")
+            self.screen_summary.setObjectName("sm_screen_summary")
+            self.screen_summary.setStyleSheet("color: #9ad8ff; font-style: italic;")
+            form_group_layout.addWidget(self.screen_summary)
+
+            chip_container = QtWidgets.QWidget(self)
+            self.screen_chip_layout = QtWidgets.QHBoxLayout(chip_container)
+            self.screen_chip_layout.setContentsMargins(0, 0, 0, 0)
+            self.screen_chip_layout.setSpacing(6)
+            form_group_layout.addWidget(chip_container)
+
+            root_layout.addWidget(form_group)
+
+            # Action buttons arranged in a grid for quicker scanning
+            actions_group = QtWidgets.QGroupBox("Quick Actions")
+            actions_group.setObjectName("sm_actions_group")
+            actions_layout = QtWidgets.QGridLayout(actions_group)
+            actions_layout.setHorizontalSpacing(8)
+            actions_layout.setVerticalSpacing(8)
+
+            self.apply_btn = QtWidgets.QPushButton("Sync Screens to GSV", self)
+            self.groups_btn = QtWidgets.QPushButton("Build VariableGroups", self)
             self.switch_btn = QtWidgets.QPushButton("Create VariableSwitch", self)
-            self.wrap_btn = QtWidgets.QPushButton("Lock Write node to Option", self)
+            self.wrap_btn = QtWidgets.QPushButton("Wrap Selected Write", self)
+
             self.apply_btn.setToolTip("Create/update the global screens list and default value. Also ensures screen sets.")
             self.groups_btn.setToolTip("Create a VariableGroup per screen (screen_<name>) if missing.")
             self.switch_btn.setToolTip("Create a VariableSwitch named 'ScreenSwitch' and inputs for every screen.")
             self.wrap_btn.setToolTip("Insert a VariableGroup upstream of the selected Write or publishable Group, wiring it to the current screen.")
 
-            # Primary action emphasized on the left; secondary actions grouped to the right
-            btn_row.addWidget(self.apply_btn, 2)
-            btn_row.addStretch(1)
-            btn_row.addWidget(self.groups_btn)
-            btn_row.addWidget(self.switch_btn)
-            btn_row.addWidget(self.wrap_btn)
-            self.apply_btn.setDefault(True)
+            self._style_action_button(self.apply_btn, role="primary")
+            self._style_action_button(self.groups_btn, role="secondary")
+            self._style_action_button(self.switch_btn, role="secondary")
+            self._style_action_button(self.wrap_btn, role="accent")
 
-            layout.addLayout(form)
-            layout.addLayout(btn_row)
-            layout.addStretch(1)
-            self.setLayout(layout)
+            actions_layout.addWidget(self.apply_btn, 0, 0)
+            actions_layout.addWidget(self.groups_btn, 0, 1)
+            actions_layout.addWidget(self.switch_btn, 1, 0)
+            actions_layout.addWidget(self.wrap_btn, 1, 1)
+
+            root_layout.addWidget(actions_group)
+            root_layout.addStretch(1)
 
             # Wire signals
             self.apply_btn.clicked.connect(self._on_apply)
             self.groups_btn.clicked.connect(self._on_groups)
             self.switch_btn.clicked.connect(self._on_switch)
             self.wrap_btn.clicked.connect(self._on_wrap)
-            # Change root selector immediately when user picks a value
             self.default_combo.currentTextChanged.connect(self._on_default_changed)
+
+        def _build_header(self) -> QtWidgets.QWidget:
+            """Create a branded header with logo + text."""
+            header = QtWidgets.QFrame(self)
+            header.setObjectName("sm_header")
+            header.setStyleSheet(
+                """
+                QFrame#sm_header {
+                    background-color: #20232a;
+                    border: 1px solid #2f3847;
+                    border-radius: 8px;
+                }
+                """
+            )
+            layout = QtWidgets.QHBoxLayout(header)
+            layout.setContentsMargins(12, 12, 12, 12)
+            layout.setSpacing(10)
+
+            self.logo_label = QtWidgets.QLabel(header)
+            self.logo_label.setAlignment(QtCore.Qt.AlignCenter)
+            self.logo_label.setObjectName("switchManagerLogo")
+            self.logo_label.setMinimumSize(72, 72)
+            self.logo_label.setMaximumHeight(128)
+            self._install_logo_pixmap()
+            layout.addWidget(self.logo_label, 0)
+
+            title_block = QtWidgets.QVBoxLayout()
+            title = QtWidgets.QLabel("Screens Manager", header)
+            title.setStyleSheet("font-size: 16px; font-weight: 600; color: #f2f2f2;")
+            subtitle = QtWidgets.QLabel("VariableSwitch + VariableGroup command center", header)
+            subtitle.setStyleSheet("color: #8fb6ff; font-size: 12px;")
+            subtitle.setWordWrap(True)
+            title_block.addWidget(title)
+            title_block.addWidget(subtitle)
+            title_block.addStretch(1)
+            layout.addLayout(title_block, 1)
+            return header
+
+        def _style_action_button(self, button: QtWidgets.QPushButton, role: str = "secondary") -> None:
+            """Give each action button a consistent style."""
+            palette = {
+                "primary": ("#2f7bf2", "#2462c1"),
+                "accent": ("#46b37b", "#2f7c55"),
+                "secondary": ("#3a3f4b", "#2b2f38"),
+            }
+            normal, pressed = palette.get(role, palette["secondary"])
+            button.setMinimumHeight(44)
+            button.setCheckable(False)
+            button.setProperty("smRole", role)
+            if QtGui is not None:
+                button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
+            button.setStyleSheet(
+                f"""
+                QPushButton[smRole="{role}"] {{
+                    background-color: {normal};
+                    border: 1px solid rgba(255,255,255,0.08);
+                    border-radius: 6px;
+                    padding: 6px 10px;
+                    color: #f5f5f5;
+                    font-weight: 500;
+                }}
+                QPushButton[smRole="{role}"]:hover {{
+                    border-color: rgba(255,255,255,0.2);
+                }}
+                QPushButton[smRole="{role}"]:pressed {{
+                    background-color: {pressed};
+                }}
+                """
+            )
+            if role == "primary":
+                button.setDefault(True)
+
+        def _update_screen_summary(self, screens: Sequence[str]) -> None:
+            """Refresh helper text + pills for the current screen list."""
+            if not hasattr(self, "screen_summary"):
+                return
+            count = len(screens)
+            if count == 0:
+                summary = "No screens configured yet."
+            elif count == 1:
+                summary = f"1 screen active: {screens[0]}"
+            elif count <= 4:
+                summary = f"{count} screens ready • {', '.join(screens)}"
+            else:
+                summary = f"{count} screens ready • {', '.join(screens[:3])}…"
+            self.screen_summary.setText(summary)
+            self._render_screen_chips(screens)
+
+        def _render_screen_chips(self, screens: Sequence[str]) -> None:
+            """Show pill labels for each screen for quick scanning."""
+            layout = getattr(self, "screen_chip_layout", None)
+            if layout is None:
+                return
+            self._clear_layout(layout)
+            if not screens:
+                placeholder = QtWidgets.QLabel("Add screens to preview them here.")
+                placeholder.setStyleSheet("color: #6c788d;")
+                layout.addWidget(placeholder)
+                layout.addStretch(1)
+                return
+            for name in screens:
+                chip = QtWidgets.QLabel(name)
+                chip.setStyleSheet(
+                    """
+                    background-color: #2f3542;
+                    border-radius: 10px;
+                    padding: 4px 10px;
+                    color: #f0f6ff;
+                """
+                )
+                layout.addWidget(chip)
+            layout.addStretch(1)
+
+        def _clear_layout(self, layout: QtWidgets.QLayout) -> None:
+            """Remove all widgets/items from the provided layout."""
+            while layout.count():
+                item = layout.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+                    continue
+                child_layout = item.layout()
+                if child_layout is not None:
+                    self._clear_layout(child_layout)
 
         def set_default_screen(self, name: str, allow_add: bool = True, emit_signal: bool = True) -> None:
             """Programmatically set the Default screen combobox.
@@ -185,8 +336,12 @@ else:
                 # Resolve to repo root where the PNG lives
                 this_dir = os.path.dirname(os.path.abspath(__file__))
                 root_dir = os.path.dirname(this_dir)
-                logo_path = os.path.join(root_dir, "switch_manager_logo_blackpng")
-                if not os.path.exists(logo_path):
+                logo_candidates = [
+                    os.path.join(root_dir, "switch_manager_logo_black.png"),
+                    os.path.join(root_dir, "switch_manager_logo.png"),
+                ]
+                logo_path = next((p for p in logo_candidates if os.path.exists(p)), None)
+                if logo_path is None:
                     return
                 self._logo_pixmap = QtGui.QPixmap(logo_path)
                 if not self._logo_pixmap.isNull():
@@ -229,6 +384,7 @@ else:
                 self.screens_edit.setText(
                     ",".join(options)
                 )
+            self._update_screen_summary(options)
 
         def _install_gsv_callback(self) -> None:
             """Install a GSV change callback to keep UI synced with globals.
