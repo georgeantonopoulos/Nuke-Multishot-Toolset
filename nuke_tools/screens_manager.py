@@ -80,6 +80,8 @@ else:
             self.setObjectName("ScreensManagerPanel")
             ScreensManagerPanel.instance = self
             self._rows_updating = False
+            self._screens_locked = False
+            self._status_timer = None
             self._screen_name_regex = None
             if QtCore is not None and hasattr(QtCore, "QRegularExpression"):
                 try:
@@ -89,6 +91,8 @@ else:
             self._build_ui()
             self._load_from_gsv()
             self._install_gsv_callback()
+            self._install_focus_tracking()
+            self._update_sync_status(force=True)
             
         def _build_ui(self) -> None:
             """Build and wire an artist-friendly Qt UI."""
@@ -160,35 +164,44 @@ else:
             actions_layout.setVerticalSpacing(8)
 
             self.apply_btn = QtWidgets.QPushButton("Sync Screens to GSV", self)
+            self.edit_btn = QtWidgets.QPushButton("Edit GSV", self)
             self.groups_btn = QtWidgets.QPushButton("Build VariableGroups", self)
             self.switch_btn = QtWidgets.QPushButton("Create VariableSwitch", self)
             self.wrap_btn = QtWidgets.QPushButton("Lock Write node to Option", self)
 
             self.apply_btn.setToolTip("Create/update the global screens list and default value. Also ensures screen sets.")
+            self.edit_btn.setToolTip("Unlock the screen list to rename or add options.")
             self.groups_btn.setToolTip("Create a VariableGroup per screen (screen_<name>) if missing.")
             self.switch_btn.setToolTip("Create a VariableSwitch named 'ScreenSwitch' and inputs for every screen.")
             self.wrap_btn.setToolTip("Insert a VariableGroup upstream of the selected Write or publishable Group, wiring it to the current screen.")
 
             self._style_action_button(self.apply_btn, role="primary")
+            self._style_action_button(self.edit_btn, role="secondary")
             self._style_action_button(self.groups_btn, role="secondary")
             self._style_action_button(self.switch_btn, role="secondary")
             self._style_action_button(self.wrap_btn, role="accent")
+            self.edit_btn.setEnabled(False)
 
             actions_layout.addWidget(self.apply_btn, 0, 0)
-            actions_layout.addWidget(self.groups_btn, 0, 1)
-            actions_layout.addWidget(self.switch_btn, 1, 0)
-            actions_layout.addWidget(self.wrap_btn, 1, 1)
+            actions_layout.addWidget(self.edit_btn, 0, 1)
+            actions_layout.addWidget(self.groups_btn, 1, 0)
+            actions_layout.addWidget(self.switch_btn, 1, 1)
+            actions_layout.addWidget(self.wrap_btn, 2, 0, 1, 2)
 
             root_layout.addWidget(actions_group)
             root_layout.addStretch(1)
+            status_bar = self._build_status_bar()
+            root_layout.addWidget(status_bar)
 
             # Wire signals
             self.apply_btn.clicked.connect(self._on_apply)
+            self.edit_btn.clicked.connect(self._on_edit_gsv)
             self.groups_btn.clicked.connect(self._on_groups)
             self.switch_btn.clicked.connect(self._on_switch)
             self.wrap_btn.clicked.connect(self._on_wrap)
             self.default_combo.currentTextChanged.connect(self._on_default_changed)
             self._set_screen_rows([])
+            self._set_screens_locked(False)
 
         def _build_header(self) -> QtWidgets.QWidget:
             """Create a branded header with logo + text."""
@@ -226,6 +239,141 @@ else:
             title_block.addStretch(1)
             layout.addLayout(title_block, 1)
             return header
+
+        def _build_status_bar(self) -> QtWidgets.QFrame:
+            """Create the status indicator shown at the bottom of the panel."""
+            status_bar = QtWidgets.QFrame(self)
+            status_bar.setObjectName("sm_status_bar")
+            status_bar.setStyleSheet(
+                """
+                QFrame#sm_status_bar {
+                    border: 1px solid #2f3847;
+                    border-radius: 6px;
+                    background-color: #1b1f27;
+                    padding: 8px 12px;
+                }
+                """
+            )
+            layout = QtWidgets.QHBoxLayout(status_bar)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(8)
+            self.status_icon_label = QtWidgets.QLabel("[!]", status_bar)
+            self.status_icon_label.setObjectName("sm_status_icon")
+            self.status_icon_label.setStyleSheet("color: #f2c14e; font-weight: 700;")
+            self.status_text_label = QtWidgets.QLabel("GSV status pending…", status_bar)
+            self.status_text_label.setObjectName("sm_status_text")
+            self.status_text_label.setStyleSheet("color: #9ad8ff; font-weight: 500;")
+            layout.addWidget(self.status_icon_label, 0)
+            layout.addWidget(self.status_text_label, 1)
+            status_bar.setToolTip("Live sync state between this panel and the Global Variables.")
+            self.status_bar = status_bar
+            return status_bar
+
+        def _install_focus_tracking(self) -> None:
+            """Set up focus monitoring so status checks only run while active."""
+            if QtCore is None or QtWidgets is None:
+                return
+            if getattr(self, "_focus_tracking_ready", False):
+                return
+            timer = QtCore.QTimer(self)
+            timer.setInterval(1000)
+            timer.timeout.connect(self._update_sync_status)
+            self._status_timer = timer
+            app = QtWidgets.QApplication.instance()
+            if app is not None:
+                try:
+                    app.focusChanged.connect(self._on_focus_changed)  # type: ignore[arg-type]
+                except Exception:
+                    pass
+            self.setFocusPolicy(QtCore.Qt.StrongFocus)
+            self._focus_tracking_ready = True
+
+        def _on_focus_changed(
+            self, _old: Optional[QtWidgets.QWidget], new: Optional[QtWidgets.QWidget]
+        ) -> None:
+            """Start/stop the status timer based on focus transitions."""
+            if self._widget_within_panel(new):
+                self._start_status_timer()
+                self._update_sync_status(force=True)
+                return
+            if not self._panel_has_focus():
+                self._stop_status_timer()
+
+        def _widget_within_panel(self, widget: Optional[QtWidgets.QWidget]) -> bool:
+            """Return True when the provided widget belongs to this panel."""
+            if widget is None:
+                return False
+            if widget is self:
+                return True
+            try:
+                return self.isAncestorOf(widget)
+            except Exception:
+                return False
+
+        def _panel_has_focus(self) -> bool:
+            """Check if any widget inside the panel currently has focus."""
+            if QtWidgets is None:
+                return False
+            app = QtWidgets.QApplication.instance()
+            focus_widget = app.focusWidget() if app is not None else None
+            return self._widget_within_panel(focus_widget)
+
+        def _start_status_timer(self) -> None:
+            """Begin periodic status checks."""
+            timer = self._status_timer
+            if timer is None:
+                return
+            if not timer.isActive():
+                try:
+                    timer.start()
+                except Exception:
+                    return
+
+        def _stop_status_timer(self) -> None:
+            """Halt periodic status checks."""
+            timer = self._status_timer
+            if timer is None:
+                return
+            try:
+                timer.stop()
+            except Exception:
+                pass
+
+        def _update_sync_status(self, force: bool = False) -> None:
+            """Refresh the status bar, optionally bypassing the focus gate."""
+            if not force and not self._panel_has_focus():
+                return
+            synced = self._gsv_state_matches_ui()
+            self._render_status_message(synced)
+
+        def _gsv_state_matches_ui(self) -> bool:
+            """Return True when UI rows/default match the current GSV."""
+            screens = self._collect_screens_from_rows()
+            gsv_screens = gsv_utils.get_list_options("__default__.screens")
+            if screens != gsv_screens:
+                return False
+            current_combo = (self.default_combo.currentText() or "").strip()
+            gsv_current = gsv_utils.get_value("__default__.screens") or ""
+            return current_combo.strip() == str(gsv_current).strip()
+
+        def _render_status_message(self, synced: bool) -> None:
+            """Apply the requested colors/text to the status widgets."""
+            icon_lbl = getattr(self, "status_icon_label", None)
+            text_lbl = getattr(self, "status_text_label", None)
+            if not isinstance(icon_lbl, QtWidgets.QLabel) or not isinstance(
+                text_lbl, QtWidgets.QLabel
+            ):
+                return
+            if synced:
+                icon_lbl.setText("[OK]")
+                icon_lbl.setStyleSheet("color: #4bc27d; font-weight: 700;")
+                text_lbl.setText("GSV synced")
+                text_lbl.setStyleSheet("color: #4bc27d; font-weight: 600;")
+            else:
+                icon_lbl.setText("[!]")
+                icon_lbl.setStyleSheet("color: #ff6b6b; font-weight: 700;")
+                text_lbl.setText("GSV not synced")
+                text_lbl.setStyleSheet("color: #ff6b6b; font-weight: 600;")
 
         def _style_action_button(self, button: QtWidgets.QPushButton, role: str = "secondary") -> None:
             """Give each action button a consistent style."""
@@ -314,6 +462,34 @@ else:
                 if child_layout is not None:
                     self._clear_layout(child_layout)
 
+        def _set_screens_locked(self, locked: bool) -> None:
+            """Toggle whether screen rows can be edited."""
+            locked_flag = bool(locked)
+            self._screens_locked = locked_flag
+            self._apply_lock_state_to_rows()
+            edit_btn = getattr(self, "edit_btn", None)
+            if isinstance(edit_btn, QtWidgets.QPushButton):
+                edit_btn.setEnabled(locked_flag)
+
+        def _apply_lock_state_to_rows(self) -> None:
+            """Apply the current lock flag to all screen rows."""
+            for row in self._iter_screen_rows():
+                self._apply_lock_to_row(row, self._screens_locked)
+
+        def _apply_lock_to_row(self, row_widget: QtWidgets.QWidget, locked: bool) -> None:
+            """Set read-only/enabled state on row controls."""
+            edit = getattr(row_widget, "line_edit", None)
+            if isinstance(edit, QtWidgets.QLineEdit):
+                edit.setReadOnly(locked)
+                opacity = "0.5" if locked else "1.0"
+                edit.setStyleSheet(
+                    f"color: rgba(242, 242, 242, {opacity}); background-color: #2a2f3b;"
+                )
+            for attr_name in ("add_button", "remove_button"):
+                btn = getattr(row_widget, attr_name, None)
+                if isinstance(btn, QtWidgets.QToolButton):
+                    btn.setEnabled(not locked)
+
         def set_default_screen(self, name: str, allow_add: bool = True, emit_signal: bool = True) -> None:
             """Programmatically set the Default screen combobox.
 
@@ -394,6 +570,8 @@ else:
                 self.set_default_screen(current, allow_add=False, emit_signal=False)
             elif options:
                 self.set_default_screen(options[0], allow_add=False, emit_signal=False)
+            self._apply_lock_state_to_rows()
+            self._update_sync_status()
 
         def _install_gsv_callback(self) -> None:
             """Install a GSV change callback to keep UI synced with globals.
@@ -449,6 +627,7 @@ else:
             finally:
                 self._rows_updating = False
             self._on_rows_changed()
+            self._apply_lock_state_to_rows()
 
         def _iter_screen_rows(self) -> List[QtWidgets.QWidget]:
             """Return all row widgets currently in the layout."""
@@ -516,6 +695,8 @@ else:
             row_layout.addWidget(remove_btn)
 
             setattr(row, "line_edit", edit)
+            setattr(row, "add_button", add_btn)
+            setattr(row, "remove_button", remove_btn)
 
             clean_text = self._sanitize_screen_name(initial_text)
             if clean_text:
@@ -527,6 +708,7 @@ else:
                 if idx >= 0:
                     insert_index = idx + 1
             layout.insertWidget(insert_index, row)
+            self._apply_lock_to_row(row, self._screens_locked)
 
             if emit_change and not self._rows_updating:
                 self._on_rows_changed()
@@ -605,6 +787,7 @@ else:
                 elif screens:
                     self.set_default_screen(screens[0], allow_add=False, emit_signal=False)
             self._update_screen_summary(screens)
+            self._update_sync_status()
 
         # Actions
         def _create_or_lock_group_for_screen(self, name: str) -> None:
@@ -634,6 +817,13 @@ else:
             for name in screens:
                 self._create_or_lock_group_for_screen(name)
             self._load_from_gsv()
+            self._set_screens_locked(True)
+            self._update_sync_status(force=True)
+
+        def _on_edit_gsv(self) -> None:
+            """Unlock the screen rows so artists can edit names/options again."""
+            self._set_screens_locked(False)
+            self._update_sync_status(force=True)
 
         def _on_groups(self) -> None:
             """Ensure VariableGroup nodes exist for each screen name."""
