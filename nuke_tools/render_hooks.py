@@ -5,9 +5,9 @@ For the current workflow we only need a lightweight helper that:
   - inserts a VariableGroup upstream of the selected Write/Group
   - rewires the main input so existing streams continue to the new group
   - sets a readable label (`[value gsv]`) so artists can see the scope
-  - forces the group's `__default__.screens` value to match the panel's pick
+  - forces the group's variant values (e.g. `__default__.screens`) to match the panel's pick
 """
-from typing import Optional
+from typing import Dict, Optional
 
 try:  # pragma: no cover - Nuke runtime provides the real module
     import nuke  # type: ignore
@@ -20,12 +20,22 @@ except Exception:  # pragma: no cover - fallback when loaded as loose modules
     import gsv_utils  # type: ignore
 
 try:
-    from . import screens_manager  # type: ignore
+    from . import switch_manager  # type: ignore
 except Exception:  # pragma: no cover
     try:
-        import screens_manager  # type: ignore
+        import switch_manager  # type: ignore
     except Exception:  # pragma: no cover
-        screens_manager = None  # type: ignore
+        switch_manager = None  # type: ignore
+
+# Legacy fallback when the module has not been renamed yet.
+if switch_manager is None:  # pragma: no cover - compatibility shim
+    try:
+        from . import screens_manager as switch_manager  # type: ignore
+    except Exception:
+        try:
+            import screens_manager as switch_manager  # type: ignore
+        except Exception:
+            switch_manager = None  # type: ignore
 
 
 def _log_exception(context: str, exc: Exception) -> None:
@@ -42,36 +52,57 @@ def _log_exception(context: str, exc: Exception) -> None:
         print(message)  # noqa: T201
 
 
-def _selected_panel_screen() -> Optional[str]:
-    """Return the current screen selected in the Screens Manager UI."""
+def _panel_variant_values() -> Dict[str, str]:
+    """Return active variant selections from the Switch Manager UI."""
 
-    panel_module = screens_manager
+    panel_module = switch_manager
     if panel_module is None:
-        return None
-    panel_cls = getattr(panel_module, "ScreensManagerPanel", None)
+        return {}
+
+    # Prefer the renamed SwitchManagerPanel class, but fall back gracefully.
+    panel_cls = getattr(panel_module, "SwitchManagerPanel", None) or getattr(
+        panel_module, "ScreensManagerPanel", None
+    )
     inst = getattr(panel_cls, "instance", None) if panel_cls else None
-    combo = getattr(inst, "default_combo", None) if inst is not None else None
+    if inst is None:
+        return {}
+
+    getter = getattr(inst, "get_active_variant_values", None)
+    if callable(getter):
+        try:
+            data = getter()
+            if isinstance(data, dict):
+                return {str(k): str(v) for k, v in data.items() if str(v).strip()}
+        except Exception:
+            pass
+
+    combo = getattr(inst, "default_combo", None)
     if combo is None:
-        return None
+        return {}
+
     try:
-        text = combo.currentText()
+        value = (combo.currentText() or "").strip()
     except Exception:
-        return None
-    text = (text or "").strip()
-    return text or None
+        return {}
+    return {"screens": value} if value else {}
 
 
-def _current_screen_fallback() -> Optional[str]:
-    """Best-effort screen selection (panel -> current value -> first option)."""
+def _resolved_variant_values() -> Dict[str, str]:
+    """Merge panel selections with current GSV values for each list-type variant."""
 
-    screen = _selected_panel_screen()
-    if screen:
-        return screen
-    screen = gsv_utils.get_current_screen()
-    if screen:
-        return screen
-    options = gsv_utils.get_list_options("__default__.screens")
-    return options[0] if options else None
+    resolved = {k: v for k, v in _panel_variant_values().items() if v}
+
+    discovered = gsv_utils.get_all_list_variants_with_current()
+    for name, payload in discovered.items():
+        current = payload.get("current")
+        if name not in resolved and current:
+            resolved[name] = str(current)
+
+    if not resolved:
+        fallback = gsv_utils.get_current_screen()
+        if fallback:
+            resolved["screens"] = fallback
+    return resolved
 
 
 def _node_name(node: object) -> str:
@@ -194,16 +225,28 @@ def _set_group_label(group: object) -> None:
         pass
 
 
-def _set_group_screen(group: object) -> None:
-    """Force the group's scope to match the panel (or fallback selection)."""
+def _set_group_variants(group: object) -> None:
+    """Write all active variant selections onto the VariableGroup node."""
 
-    screen = _current_screen_fallback()
-    if not screen:
+    values = _resolved_variant_values()
+    if not values:
         return
+
+    gsv_knob = None
     try:
-        group["gsv"].setGsvValue("__default__.screens", screen)
+        gsv_knob = group["gsv"]
     except Exception:
-        pass
+        gsv_knob = None
+
+    if gsv_knob is None:
+        return
+
+    for variant, value in values.items():
+        path = f"__default__.{variant}"
+        try:
+            gsv_knob.setGsvValue(path, value)
+        except Exception:
+            pass
 
 
 def _set_group_tile_color(group: object) -> None:
@@ -271,7 +314,7 @@ def encapsulate_write_with_variable_group(node: Optional[object] = None) -> Opti
         _position_group(group, target)
         _rewire_primary_input(group, target)
         _set_group_label(group)
-        _set_group_screen(group)
+        _set_group_variants(group)
         _set_group_tile_color(group)
 
         try:
