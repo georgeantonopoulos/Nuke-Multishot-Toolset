@@ -79,6 +79,13 @@ else:
             self.setWindowTitle("Screens Manager")
             self.setObjectName("ScreensManagerPanel")
             ScreensManagerPanel.instance = self
+            self._rows_updating = False
+            self._screen_name_regex = None
+            if QtCore is not None and hasattr(QtCore, "QRegularExpression"):
+                try:
+                    self._screen_name_regex = QtCore.QRegularExpression(r"^[A-Za-z0-9_-]+$")
+                except Exception:
+                    self._screen_name_regex = None
             self._build_ui()
             self._load_from_gsv()
             self._install_gsv_callback()
@@ -109,10 +116,22 @@ else:
             form = QtWidgets.QFormLayout()
             form.setLabelAlignment(QtCore.Qt.AlignRight)
 
-            self.screens_edit = QtWidgets.QLineEdit(self)
-            self.screens_edit.setPlaceholderText("Comma-separated screen names, e.g. Moxy,Godzilla,NYD400")
-            self.screens_edit.setToolTip("Enter a list of screen names. Duplicates will be removed.")
-            form.addRow("Screens:", self.screens_edit)
+            screens_field = QtWidgets.QWidget(self)
+            screens_field_layout = QtWidgets.QVBoxLayout(screens_field)
+            screens_field_layout.setContentsMargins(0, 0, 0, 0)
+            screens_field_layout.setSpacing(4)
+
+            self.screens_rows_container = QtWidgets.QWidget(self)
+            self.screens_rows_layout = QtWidgets.QVBoxLayout(self.screens_rows_container)
+            self.screens_rows_layout.setContentsMargins(0, 0, 0, 0)
+            self.screens_rows_layout.setSpacing(6)
+            screens_field_layout.addWidget(self.screens_rows_container)
+
+            screens_hint = QtWidgets.QLabel("Letters, numbers, underscore, and hyphen only.")
+            screens_hint.setStyleSheet("color: #8a93a5; font-size: 10px;")
+            screens_field_layout.addWidget(screens_hint)
+
+            form.addRow("Screens:", screens_field)
 
             self.default_combo = QtWidgets.QComboBox(self)
             self.default_combo.setObjectName("sm_default_screen")
@@ -169,6 +188,7 @@ else:
             self.switch_btn.clicked.connect(self._on_switch)
             self.wrap_btn.clicked.connect(self._on_wrap)
             self.default_combo.currentTextChanged.connect(self._on_default_changed)
+            self._set_screen_rows([])
 
         def _build_header(self) -> QtWidgets.QWidget:
             """Create a branded header with logo + text."""
@@ -368,22 +388,12 @@ else:
         def _load_from_gsv(self) -> None:
             """Populate UI from the current `__default__.screens` options."""
             options = gsv_utils.get_list_options("__default__.screens")
-            self._set_combo_items(self.default_combo, options)
-            # Set combo to current selection without emitting change
+            self._set_screen_rows(options)
             current = gsv_utils.get_value("__default__.screens")
             if current:
-                try:
-                    self.default_combo.blockSignals(True)
-                    idx = self.default_combo.findText(current)
-                    if idx >= 0:
-                        self.default_combo.setCurrentIndex(idx)
-                finally:
-                    self.default_combo.blockSignals(False)
-            if options:
-                self.screens_edit.setText(
-                    ",".join(options)
-                )
-            self._update_screen_summary(options)
+                self.set_default_screen(current, allow_add=False, emit_signal=False)
+            elif options:
+                self.set_default_screen(options[0], allow_add=False, emit_signal=False)
 
         def _install_gsv_callback(self) -> None:
             """Install a GSV change callback to keep UI synced with globals.
@@ -420,25 +430,186 @@ else:
             finally:
                 combo.blockSignals(False)
 
-        def _parse_screens(self) -> List[str]:
-            """Parse and de-duplicate comma-separated screen names from the edit."""
-            text = self.screens_edit.text().strip()
-            if not text:
+        def _set_screen_rows(self, names: Sequence[str]) -> None:
+            """Rebuild the screen rows from the provided names."""
+            layout = getattr(self, "screens_rows_layout", None)
+            if layout is None:
+                return
+            self._rows_updating = True
+            try:
+                for row in list(self._iter_screen_rows()):
+                    layout.removeWidget(row)
+                    row.deleteLater()
+                if names:
+                    for name in names:
+                        self._add_screen_row(name, emit_change=False)
+                else:
+                    for _ in range(2):
+                        self._add_screen_row("", emit_change=False)
+            finally:
+                self._rows_updating = False
+            self._on_rows_changed()
+
+        def _iter_screen_rows(self) -> List[QtWidgets.QWidget]:
+            """Return all row widgets currently in the layout."""
+            layout = getattr(self, "screens_rows_layout", None)
+            if layout is None:
                 return []
-            names = [n.strip() for n in text.split(",")]
-            # de-duplicate while preserving order
+            rows: List[QtWidgets.QWidget] = []
+            for idx in range(layout.count()):
+                item = layout.itemAt(idx)
+                if item is None:
+                    continue
+                widget = item.widget()
+                if widget is not None:
+                    rows.append(widget)
+            return rows
+
+        def _add_screen_row(
+            self,
+            initial_text: str = "",
+            insert_after: Optional[QtWidgets.QWidget] = None,
+            emit_change: bool = True,
+        ) -> Optional[QtWidgets.QWidget]:
+            """Create a new editable row, optionally inserting after another row."""
+            layout = getattr(self, "screens_rows_layout", None)
+            container = getattr(self, "screens_rows_container", None)
+            if layout is None or container is None:
+                return None
+
+            row = QtWidgets.QWidget(container)
+            row_layout = QtWidgets.QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(4)
+
+            edit = QtWidgets.QLineEdit(row)
+            edit.setPlaceholderText("Screen name")
+            edit.setObjectName("sm_screen_row_edit")
+            if (
+                QtGui is not None
+                and hasattr(QtGui, "QRegularExpressionValidator")
+                and getattr(self, "_screen_name_regex", None) is not None
+            ):
+                try:
+                    validator = QtGui.QRegularExpressionValidator(self._screen_name_regex, edit)
+                    edit.setValidator(validator)
+                except Exception:
+                    pass
+            edit.textEdited.connect(lambda text, e=edit: self._sanitize_and_emit(e, text))
+
+            add_btn = QtWidgets.QToolButton(row)
+            add_btn.setText("+")
+            add_btn.setToolTip("Add a new screen row below.")
+            add_btn.setAutoRaise(True)
+            add_btn.setFixedSize(24, 24)
+            add_btn.clicked.connect(lambda *_args, r=row: self._add_screen_row(insert_after=r))
+
+            remove_btn = QtWidgets.QToolButton(row)
+            remove_btn.setText("-")
+            remove_btn.setToolTip("Remove this row.")
+            remove_btn.setAutoRaise(True)
+            remove_btn.setFixedSize(24, 24)
+            remove_btn.clicked.connect(lambda *_args, r=row: self._remove_screen_row(r))
+
+            row_layout.addWidget(edit, 1)
+            row_layout.addWidget(add_btn)
+            row_layout.addWidget(remove_btn)
+
+            setattr(row, "line_edit", edit)
+
+            clean_text = self._sanitize_screen_name(initial_text)
+            if clean_text:
+                edit.setText(clean_text)
+
+            insert_index = layout.count()
+            if insert_after is not None:
+                idx = layout.indexOf(insert_after)
+                if idx >= 0:
+                    insert_index = idx + 1
+            layout.insertWidget(insert_index, row)
+
+            if emit_change and not self._rows_updating:
+                self._on_rows_changed()
+            return row
+
+        def _remove_screen_row(self, row_widget: QtWidgets.QWidget) -> None:
+            """Remove the requested row, leaving at least one available."""
+            layout = getattr(self, "screens_rows_layout", None)
+            if layout is None or row_widget is None:
+                return
+            rows = self._iter_screen_rows()
+            if len(rows) <= 1:
+                edit = getattr(row_widget, "line_edit", None)
+                if isinstance(edit, QtWidgets.QLineEdit):
+                    edit.clear()
+                self._on_rows_changed()
+                return
+            layout.removeWidget(row_widget)
+            row_widget.deleteLater()
+            self._on_rows_changed()
+
+        def _collect_screens_from_rows(self) -> List[str]:
+            """Gather unique, non-empty names from the row editors."""
+            screens: List[str] = []
             seen = set()
-            unique: List[str] = []
-            for n in names:
-                if n and n not in seen:
-                    unique.append(n)
-                    seen.add(n)
-            return unique
+            for row in self._iter_screen_rows():
+                edit = getattr(row, "line_edit", None)
+                if not isinstance(edit, QtWidgets.QLineEdit):
+                    continue
+                name = self._sanitize_screen_name(edit.text().strip())
+                if name and name not in seen:
+                    seen.add(name)
+                    screens.append(name)
+            return screens
+
+        def _sanitize_screen_name(self, text: str) -> str:
+            """Filter a string down to the allowed character set."""
+            if not text:
+                return ""
+            allowed = "_-"
+            return "".join(ch for ch in text if ch.isalnum() or ch in allowed)
+
+        def _sanitize_and_emit(self, edit: QtWidgets.QLineEdit, text: str) -> None:
+            """Live-filter invalid characters and trigger recompute."""
+            raw = text or ""
+            cursor = edit.cursorPosition()
+            allowed = "_-"
+            clean_chars: List[str] = []
+            removed_before_cursor = 0
+            for idx, ch in enumerate(raw):
+                if ch.isalnum() or ch in allowed:
+                    clean_chars.append(ch)
+                else:
+                    if idx < cursor:
+                        removed_before_cursor += 1
+            clean = "".join(clean_chars)
+            if clean != raw:
+                new_cursor = max(0, cursor - removed_before_cursor)
+                edit.blockSignals(True)
+                edit.setText(clean)
+                edit.setCursorPosition(new_cursor)
+                edit.blockSignals(False)
+            self._on_rows_changed()
+
+        def _on_rows_changed(self) -> None:
+            """Refresh combobox + summary whenever row contents change."""
+            if getattr(self, "_rows_updating", False):
+                return
+            screens = self._collect_screens_from_rows()
+            combo = getattr(self, "default_combo", None)
+            previous = combo.currentText() if combo is not None else ""
+            if combo is not None:
+                self._set_combo_items(combo, screens)
+                if previous and previous in screens:
+                    self.set_default_screen(previous, allow_add=False, emit_signal=False)
+                elif screens:
+                    self.set_default_screen(screens[0], allow_add=False, emit_signal=False)
+            self._update_screen_summary(screens)
 
         # Actions
         def _on_apply(self) -> None:
             """Apply screens/default to GSV and refresh UI."""
-            screens = self._parse_screens()
+            screens = self._collect_screens_from_rows()
             if not screens:
                 return
             default = self.default_combo.currentText() or screens[0]
@@ -456,7 +627,7 @@ else:
 
         def _on_groups(self) -> None:
             """Ensure VariableGroup nodes exist for each screen name."""
-            for name in self._parse_screens():
+            for name in self._collect_screens_from_rows():
                 grp = gsv_utils.create_variable_group(f"screen_{name}")
                 # Lock the group's local scope to this option so it evaluates correctly
                 try:
@@ -471,9 +642,9 @@ else:
             if nuke is None:
                 return
 
-            screens = gsv_utils.get_list_options("__default__.screens")
+            screens = self._collect_screens_from_rows()
             if not screens:
-                screens = self._parse_screens()
+                screens = gsv_utils.get_list_options("__default__.screens")
             if not screens:
                 self._warn_user("Add at least one screen before creating a VariableSwitch.")
                 return
