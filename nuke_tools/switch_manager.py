@@ -573,11 +573,15 @@ else:
                         pass
                 return
 
+            switch_name = f"VariableSwitch_{variant}"
             try:
-                switch_name = nuke.uniqueName(f"{variant.capitalize()}Switch")
+                switch_name = nuke.uniqueName(switch_name)
                 switch.setName(switch_name)
             except Exception:
-                pass
+                try:
+                    switch_name = switch.name()
+                except Exception:
+                    switch_name = f"VariableSwitch_{variant}"
 
             self._force_switch_variable(switch, variant)
             self._create_switch_inputs(switch, options, switch_name)
