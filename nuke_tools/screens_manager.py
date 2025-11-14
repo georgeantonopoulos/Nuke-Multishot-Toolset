@@ -694,6 +694,7 @@ else:
             try:
                 # Apply a distinctive tile color to the VariableSwitch for screens workflows.
                 switch["tile_color"].setValue(7012351)
+                switch["node_font_color"].setValue(4294967295)
             except Exception:
                 pass
 
@@ -738,6 +739,9 @@ else:
             parts = raw.split("\t")
             candidate = parts[-1] if parts else raw
             candidate = candidate.strip()
+            # If a tab is still present (some Nuke versions embed extra info), keep the first token.
+            if "\t" in candidate:
+                candidate = candidate.split("\t", 1)[0].strip()
             if not candidate:
                 return ""
             return candidate.split(".")[-1]
