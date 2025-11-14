@@ -607,6 +607,20 @@ else:
             self._update_screen_summary(screens)
 
         # Actions
+        def _create_or_lock_group_for_screen(self, name: str) -> None:
+            """Create a VariableGroup for a screen and lock its variable to that option.
+
+            This ensures consistent behavior between 'Sync Screens to GSV' and
+            'Build VariableGroups' actions by explicitly setting the group's
+            local GSV value for `__default__.screens` to the provided screen name.
+            """
+            grp = gsv_utils.create_variable_group(f"screen_{name}")
+            try:
+                if grp is not None:
+                    grp["gsv"].setGsvValue("__default__.screens", str(name))
+            except Exception:
+                pass
+
         def _on_apply(self) -> None:
             """Apply screens/default to GSV and refresh UI."""
             screens = self._collect_screens_from_rows()
@@ -616,25 +630,15 @@ else:
             gsv_utils.ensure_screen_list(screens, default)
             # Also ensure each screen has a Set at the root for %Set.Var usage
             gsv_utils.ensure_screen_sets(screens)
-            # Proactively ensure a VariableGroup per screen so artists see a
-            # dedicated scope folder after adding new screens.
-            try:
-                for name in screens:
-                    gsv_utils.create_variable_group(f"screen_{name}")
-            except Exception:
-                pass
+            # Proactively ensure a VariableGroup per screen, locked to each option.
+            for name in screens:
+                self._create_or_lock_group_for_screen(name)
             self._load_from_gsv()
 
         def _on_groups(self) -> None:
             """Ensure VariableGroup nodes exist for each screen name."""
             for name in self._collect_screens_from_rows():
-                grp = gsv_utils.create_variable_group(f"screen_{name}")
-                # Lock the group's local scope to this option so it evaluates correctly
-                try:
-                    if grp is not None:
-                        grp["gsv"].setGsvValue("__default__.screens", str(name))
-                except Exception:
-                    pass
+                self._create_or_lock_group_for_screen(name)
 
         def _on_switch(self) -> None:
             """Create a `VariableSwitch` wired to `__default__.screens`."""
