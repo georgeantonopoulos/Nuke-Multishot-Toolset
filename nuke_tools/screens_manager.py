@@ -685,7 +685,15 @@ else:
             self._populate_switch_patterns(switch, screens)
 
             try:
-                switch["label"].setValue("[value variable]")
+                # Use a clean, human-friendly variable name on the label (e.g. "screens").
+                label_text = self._summarize_switch_variable(switch)
+                switch["label"].setValue(label_text)
+            except Exception:
+                pass
+
+            try:
+                # Apply a distinctive tile color to the VariableSwitch for screens workflows.
+                switch["tile_color"].setValue(7012351)
             except Exception:
                 pass
 
@@ -709,6 +717,30 @@ else:
                 gsv_utils.set_value("__default__.screens", text)
             except Exception:
                 pass
+
+        def _summarize_switch_variable(self, switch: object) -> str:
+            """Return a short variable name suitable for the switch label.
+
+            The VariableSwitch `variable` knob can expose menu-style values like
+            `"__default__.screens\\tscreens"`. This helper collapses that into a
+            minimal, artist-facing token such as `"screens"`.
+            """
+
+            try:
+                knob = switch["variable"]
+            except Exception:
+                return ""
+            try:
+                raw = str(knob.value())
+            except Exception:
+                return ""
+            # Split away any menu metadata and strip namespaces like "__default__."
+            parts = raw.split("\t")
+            candidate = parts[-1] if parts else raw
+            candidate = candidate.strip()
+            if not candidate:
+                return ""
+            return candidate.split(".")[-1]
 
         def _on_wrap(self) -> None:
             """Insert a VariableGroup upstream of the selected Write/Group."""

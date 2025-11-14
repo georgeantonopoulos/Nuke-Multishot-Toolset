@@ -206,6 +206,15 @@ def _set_group_screen(group: object) -> None:
         pass
 
 
+def _set_group_tile_color(group: object) -> None:
+    """Apply a distinctive tile color to VariableGroups created via the wrap helper."""
+
+    try:
+        group["tile_color"].setValue(3383053311)
+    except Exception:
+        pass
+
+
 def _supported_target(node: object) -> bool:
     try:
         cls = node.Class()
@@ -263,6 +272,7 @@ def encapsulate_write_with_variable_group(node: Optional[object] = None) -> Opti
         _rewire_primary_input(group, target)
         _set_group_label(group)
         _set_group_screen(group)
+        _set_group_tile_color(group)
 
         try:
             group.showControlPanel()
