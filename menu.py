@@ -14,15 +14,26 @@ from nukescripts import panels  # type: ignore
 nuke.pluginAddPath('./nuke_tools')
 
 # Tools on NUKE_PATH
-from screens_manager import ScreensManagerPanel  # type: ignore
+from switch_manager import SwitchManagerPanel  # type: ignore
+
+PANEL_CLASS = 'SwitchManagerPanel'
+PANEL_NAME = 'Switch Manager'
+NEW_PANEL_ID = 'uk.co.bcn.multishot.switch_manager'
+LEGACY_PANEL_ID = 'uk.co.bcn.multishot.screens_manager'
 
 
-def add_screens_manager_panel() -> Optional[object]:
-    """Create and dock the Screens Manager panel next to Properties."""
+def add_switch_manager_panel() -> Optional[object]:
+    """Create and dock the Switch Manager panel next to Properties."""
 
     try:
         pane = nuke.getPaneFor('Properties.1')
-        return panels.registerWidgetAsPanel('ScreensManagerPanel', 'Screens Manager', 'uk.co.bcn.multishot.screens_manager', True).addToPane(pane) if pane else panels.registerWidgetAsPanel('ScreensManagerPanel', 'Screens Manager', 'uk.co.bcn.multishot.screens_manager', True)
+        registered = panels.registerWidgetAsPanel(
+            PANEL_CLASS,
+            PANEL_NAME,
+            NEW_PANEL_ID,
+            True,
+        )
+        return registered.addToPane(pane) if pane else registered
     except Exception:
         return None
 
@@ -31,13 +42,15 @@ def add_screens_manager_panel() -> Optional[object]:
 try:
     if nuke.env['gui']:
         # Pane menu entry
-        nuke.menu('Pane').addCommand('Screens Manager', add_screens_manager_panel)
+        nuke.menu('Pane').addCommand(PANEL_NAME, add_switch_manager_panel)
         # Enable layout save/restore
-        nukescripts.registerPanel('uk.co.bcn.multishot.screens_manager', add_screens_manager_panel)
+        nukescripts.registerPanel(NEW_PANEL_ID, add_switch_manager_panel)
+        # Legacy ID for saved layouts created before the rename
+        nukescripts.registerPanel(LEGACY_PANEL_ID, add_switch_manager_panel)
         # Optional: Nuke menu shortcut
         nuke.menu('Nuke').addCommand(
-            'BCN Multishot/Screens Manager',
-            add_screens_manager_panel,
+            f'BCN Multishot/{PANEL_NAME}',
+            add_switch_manager_panel,
         )
 except Exception:
     pass

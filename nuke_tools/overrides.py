@@ -1,14 +1,19 @@
 """Helpers to create per-screen overrides using GSVs and expressions.
 
-This aligns with the corrected mental model:
-  - A global List selector lives at `__default__.screens`.
+Switch Manager can now drive multiple variants, but `__default__.screens`
+remains the canonical selector for screen-specific overrides. These helpers
+continue to focus on that variant so existing scripts do not break, while the
+new panel can manage additional list variables in parallel.
+
+Guidance:
+  - A List selector lives at `__default__.screens`.
   - Each screen has a Variable Set at the root, e.g. `Sphere`, `TSQ_Duffy`.
-  - Values are referenced in strings via `%Set.Var` (fixed set), while
-    dynamic per-screen numeric knobs can use short Python expressions.
+  - Values are referenced in strings via `%Set.Var` (fixed set), while dynamic
+    per-screen numeric knobs can use short Python expressions.
 
 Avoid generic callbacks where possible. Prefer expressions and
-VariableSwitch/Link nodes. Where knob values must change based on the
-currently selected screen, inject a compact Python expression that reads
+VariableSwitch/Link nodes. Where knob values must change based on the currently
+selected screen, inject a compact Python expression that reads
 `__default__.screens` and fetches the field from the selected set.
 """
 
