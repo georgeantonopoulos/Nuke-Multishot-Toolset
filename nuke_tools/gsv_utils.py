@@ -4,7 +4,7 @@ All functions are defensive and return early when Nuke is not available to
 keep the module import-safe outside Nuke.
 """
 
-from typing import Iterable, List, Optional, Sequence, Dict, Any
+from typing import Iterable, List, Optional, Sequence, Dict, Any, Tuple
 
 try:
     import nuke  # type: ignore
@@ -74,6 +74,143 @@ def set_value(path: str, value: str) -> None:
         gsv.setGsvValue(path, value)
     except Exception:
         pass
+
+
+def remove_variant(variant_name: str) -> None:
+    """Remove the entire `__default__.<variant>` entry if it exists."""
+
+    path = _variant_path(variant_name)
+    if path is None:
+        return
+
+    gsv = get_root_gsv_knob()
+    if gsv is None:
+        return
+
+    try:
+        remove = getattr(gsv, "removeGsv", None)
+        if callable(remove):
+            remove(path)  # type: ignore[arg-type]
+    except Exception:
+        pass
+
+
+def _variant_path(variant_name: str) -> Optional[str]:
+    """Return the canonical GSV path for a variant name."""
+
+    variant = (variant_name or "").strip()
+    if not variant:
+        return None
+    return f"__default__.{variant}"
+
+
+def _normalized_options(options: Sequence[str]) -> List[str]:
+    """Return a deduplicated list of clean option strings (order preserved)."""
+
+    clean: List[str] = []
+    seen = set()
+    for opt in options:
+        text = str(opt).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        clean.append(text)
+    return clean
+
+
+def ensure_variant_list(
+    variant_name: str, options: Sequence[str], default_option: Optional[str] = None
+) -> None:
+    """Ensure a list-type variant (e.g. `screens`, `version`) exists with options.
+
+    Parameters
+    ----------
+    variant_name:
+        The bare variant key, e.g. ``"screens"`` (mapped to ``__default__.screens``).
+    options:
+        Iterable of option names; duplicates and empty strings are removed.
+    default_option:
+        Choice that should be selected; falls back to the first option.
+    """
+
+    path = _variant_path(variant_name)
+    if path is None:
+        return
+
+    clean_options = _normalized_options(options)
+    if not clean_options:
+        return
+
+    default = default_option if default_option in clean_options else clean_options[0]
+
+    try:
+        set_value(path, default)
+    except Exception:
+        pass
+
+    ensure_list_datatype(path)
+    set_list_options(path, clean_options)
+    try:
+        set_favorite(path, True)
+    except Exception:
+        pass
+
+
+def get_variant_options(variant_name: str) -> List[str]:
+    """Return list options for the requested variant name."""
+
+    path = _variant_path(variant_name)
+    if path is None:
+        return []
+    return get_list_options(path)
+
+
+def set_variant_value(variant_name: str, value: str) -> None:
+    """Set the selected option for a list-type variant."""
+
+    path = _variant_path(variant_name)
+    if path is None:
+        return
+    set_value(path, value)
+
+
+def get_variant_value(variant_name: str) -> Optional[str]:
+    """Return the current selection for a list-type variant."""
+
+    path = _variant_path(variant_name)
+    if path is None:
+        return None
+    return get_value(path)
+
+
+def discover_list_variants() -> Dict[str, List[str]]:
+    """Return a mapping of variant name -> options for all list-type entries."""
+
+    variants: Dict[str, List[str]] = {}
+    root_value = get_knob_value()
+    default_set = root_value.get("__default__", {})
+    for raw_name in default_set.keys():
+        name = str(raw_name)
+        path = _variant_path(name)
+        if path is None:
+            continue
+        options = get_list_options(path)
+        if options:
+            variants[name] = options
+    return variants
+
+
+def get_all_list_variants_with_current() -> Dict[str, Dict[str, Any]]:
+    """Return metadata for each list-type variant (options + current value)."""
+
+    variants: Dict[str, Dict[str, Any]] = {}
+    discovered = discover_list_variants()
+    for name, options in discovered.items():
+        current = get_variant_value(name)
+        if not current and options:
+            current = options[0]
+        variants[name] = {"options": options, "current": current}
+    return variants
 
 
 def set_favorite(path: str, is_favorite: bool = True) -> None:
@@ -173,34 +310,9 @@ def merge_root_value(updates: Dict[str, Dict[str, Any]]) -> None:
 
 
 def ensure_screen_list(screens: Sequence[str], default_screen: Optional[str] = None) -> None:
-    """Ensure `__default__.screens` exists, is a List, and has given options.
+    """Backwards-compatible wrapper for `ensure_variant_list(\"screens\", ...)`."""
 
-    Parameters:
-      - screens: unique screen names
-      - default_screen: initial selection; falls back to first option
-    """
-
-    # Guard: if provided default is not among options, fall back to first option
-    if (not default_screen or (default_screen not in screens)) and screens:
-        default_screen = screens[0]
-
-    # Create the variable first so subsequent type/option calls can succeed
-    if default_screen:
-        try:
-            set_value("__default__.screens", default_screen)
-        except Exception:
-            pass
-
-    # Ensure list type and options on the newly created variable
-    # IMPORTANT: Do not call gsv.setValue/merge_root_value here, as it
-    # would reset the variable type back to Text. Use the typed API only.
-    ensure_list_datatype("__default__.screens")
-    set_list_options("__default__.screens", screens)
-    # Ensure visibility in Variables panel by marking as favorite
-    try:
-        set_favorite("__default__.screens", True)
-    except Exception:
-        pass
+    ensure_variant_list("screens", screens, default_screen)
 
 
 def create_variable_group(name: str):
@@ -218,32 +330,25 @@ def create_variable_group(name: str):
 
 
 def ensure_screen_sets(screens: Sequence[str]) -> None:
-    """Ensure there is a GSV set for each screen name.
+    """Ensure there is a GSV set for each screen name (legacy helper)."""
 
-    This follows the mental model where each screen is a Variable Set at root
-    (e.g. `Sphere`, `TSQ_Duffy`). Values can then be referenced as
-    `%Sphere.width` or `%TSQ_Duffy.output_root` in string knobs.
-    """
+    ensure_option_sets(screens)
 
-    for name in screens:
+
+def ensure_option_sets(option_names: Sequence[str]) -> None:
+    """Ensure there is a GSV set for every provided option name."""
+
+    for name in _normalized_options(option_names):
         try:
-            if name:
-                add_set(str(name))
+            add_set(name)
         except Exception:
-            # Non-fatal; continue with the rest
             pass
 
 
 def get_current_screen() -> Optional[str]:
-    """Return the currently selected screen from `__default__.screens`.
+    """Return the currently selected screen (legacy helper)."""
 
-    Returns None if unavailable.
-    """
-
-    try:
-        return get_value("__default__.screens")
-    except Exception:
-        return None
+    return get_variant_value("screens")
 
 
 def get_value_for_current_screen(key: str) -> Optional[str]:
@@ -256,9 +361,6 @@ def get_value_for_current_screen(key: str) -> Optional[str]:
     current = get_current_screen()
     if not current:
         return None
-    try:
-        return get_value(f"{current}.{key}")
-    except Exception:
-        return None
+    return get_value(f"{current}.{key}")
 
 
