@@ -121,11 +121,37 @@ else:
             header.addWidget(self.variant_edit, 1)
 
             current_label = QtWidgets.QLabel("Current:", self)
-            current_label.setStyleSheet("color: #a0a7bb;")
+            # Make the current-selection label visually prominent so artists
+            # immediately understand this is the primary control they use while
+            # working in a comp.
+            current_label.setStyleSheet("color: #4bc27d; font-weight: 600;")
             header.addWidget(current_label)
 
             self.current_combo = QtWidgets.QComboBox(self)
+            self.current_combo.setObjectName("switchVariantCurrentCombo")
+            self.current_combo.setToolTip(
+                "Active option for this variant. Changing this writes directly to the GSV "
+                "value without altering the variant's options."
+            )
             self.current_combo.currentTextChanged.connect(self._on_default_changed)
+            # Style the current-selection combo as a primary, high-visibility control.
+            self.current_combo.setStyleSheet(
+                """
+                QComboBox#switchVariantCurrentCombo {
+                    background-color: #2b3340;
+                    border: 1px solid #4bc27d;
+                    border-radius: 4px;
+                    padding: 2px 6px;
+                    color: #f5f5f5;
+                    font-weight: 600;
+                    min-width: 120px;
+                }
+                QComboBox#switchVariantCurrentCombo::drop-down {
+                    border-left: 1px solid #4bc27d;
+                    width: 18px;
+                }
+                """
+            )
             header.addWidget(self.current_combo, 0)
 
             self.remove_btn = QtWidgets.QToolButton(self)
@@ -264,7 +290,10 @@ else:
             """Lock or unlock the section for editing."""
 
             self._locked = locked
-            widgets: List[QtWidgets.QWidget] = [self.variant_edit, self.current_combo]
+            # Variant name and option rows are locked when the GSV definition is
+            # considered synced, but the current-selection combo must remain
+            # editable so artists can change the active value at any time.
+            widgets: List[QtWidgets.QWidget] = [self.variant_edit]
             for row in self._iter_rows():
                 edit = getattr(row, "line_edit", None)
                 add_btn = getattr(row, "add_btn", None)
@@ -508,9 +537,23 @@ else:
             self._change_callback()
 
         def _on_default_changed(self, _text: str) -> None:
-            """Notify parent panel when the selection changes."""
+            """Apply the current selection directly to the root GSV.
 
-            self._change_callback()
+            Changing the current value is treated as a live edit of the variant's
+            selected option, not as a structural change to the variant/options
+            themselves, so it does not mark the panel as "unsynced".
+            """
+
+            variant = self.variant_name()
+            current = self.current_selection()
+            if not variant or not current:
+                return
+            try:
+                gsv_utils.set_variant_value(variant, current)
+            except Exception:
+                # Failing to write to the GSV should not break the UI; the user
+                # can re-sync manually if needed.
+                pass
 
         # ----------------------------------------------------- Variant actions
         def apply_to_gsv(self) -> None:
