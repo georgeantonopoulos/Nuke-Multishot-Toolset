@@ -45,6 +45,8 @@ except Exception:  # pragma: no cover
     except Exception:  # pragma: no cover
         render_hooks = None  # type: ignore
 
+SWITCH_TILE_COLOR = 7012351
+
 
 def _noop_callback() -> None:
     """Return a no-op callback."""
@@ -586,11 +588,7 @@ else:
             self._force_switch_variable(switch, variant)
             self._create_switch_inputs(switch, options, switch_name)
             self._populate_switch_patterns(switch, options)
-
-            try:
-                switch["label"].setValue("[value variant]")
-            except Exception:
-                pass
+            self._style_variable_switch(switch)
 
             try:
                 switch.setSelected(True)
@@ -692,6 +690,22 @@ else:
                 except Exception:
                     pass
 
+        def _style_variable_switch(self, switch: object) -> None:
+            """Apply consistent labeling/color to the created VariableSwitch."""
+
+            try:
+                switch["label"].setValue("[value variable]")
+            except Exception:
+                pass
+            try:
+                switch["tile_color"].setValue(SWITCH_TILE_COLOR)
+            except Exception:
+                pass
+            try:
+                switch["node_font_color"].setValue(4294967295)
+            except Exception:
+                pass
+
         # ----------------------------------------------------------- Utilities
         def _group_node_name(self, option_name: str) -> str:
             """Return a readable VariableGroup node name for this variant/option."""
@@ -724,9 +738,14 @@ else:
             self.setObjectName("SwitchManagerPanel")
             SwitchManagerPanel.instance = self
             self._is_synced = False
+            self._sections_locked = False
+            self._status_timer = None
+            self._focus_tracking_ready = False
             self._build_ui()
             self._load_from_gsv()
             self._install_gsv_callback()
+            self._install_focus_tracking()
+            self._update_sync_status(force=True)
 
         # ----------------------------------------------------------------- UI
         def _build_ui(self) -> None:
@@ -745,9 +764,6 @@ else:
             hero.setWordWrap(True)
             hero.setStyleSheet("color: #d6d6d6; font-size: 11px;")
             layout.addWidget(hero)
-
-            self.status_label = QtWidgets.QLabel("", self)
-            layout.addWidget(self.status_label)
 
             self.sections_holder = QtWidgets.QWidget(self)
             self.sections_layout = QtWidgets.QVBoxLayout(self.sections_holder)
@@ -781,6 +797,7 @@ else:
             layout.addWidget(self.wrap_btn)
 
             layout.addStretch(1)
+            layout.addWidget(self._build_status_bar())
 
             self.sync_btn.clicked.connect(self._on_sync)
             self.edit_btn.clicked.connect(self._on_edit)
@@ -897,17 +914,18 @@ else:
             variant_name: str = "",
             options: Optional[Sequence[str]] = None,
             current_value: Optional[str] = None,
-            locked: bool = False,
+            locked: Optional[bool] = None,
         ) -> VariantSectionWidget:
             """Create and add a new variant section widget."""
 
+            locked_flag = self._sections_locked if locked is None else bool(locked)
             section = VariantSectionWidget(
                 change_callback=self._mark_unsynced,
                 remove_callback=self._remove_section,
                 variant_name=variant_name,
                 options=options or [],
                 current_value=current_value,
-                locked=locked,
+                locked=locked_flag,
                 parent=self.sections_holder,
             )
             self.sections_layout.addWidget(section)
@@ -920,7 +938,7 @@ else:
             if len(widgets) <= 1:
                 section.set_variant_name("", emit_signal=False)
                 section.set_options([], emit_signal=False)
-                section.set_locked(False)
+                self._set_sections_locked(False)
                 self._mark_unsynced()
                 return
             self.sections_layout.removeWidget(section)
@@ -947,6 +965,191 @@ else:
                 self.sections_layout.removeWidget(widget)
                 widget.deleteLater()
 
+        # ------------------------------------------------------ Status helpers
+        def _build_status_bar(self) -> QtWidgets.QFrame:
+            """Create the status indicator shown at the bottom of the panel."""
+
+            status_bar = QtWidgets.QFrame(self)
+            status_bar.setObjectName("switchManagerStatusBar")
+            status_bar.setStyleSheet(
+                """
+                QFrame#switchManagerStatusBar {
+                    border: 1px solid #2f3847;
+                    border-radius: 6px;
+                    background-color: #1b1f27;
+                    padding: 8px 12px;
+                }
+                """
+            )
+            layout = QtWidgets.QHBoxLayout(status_bar)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(8)
+            self.status_icon_label = QtWidgets.QLabel("[!]", status_bar)
+            self.status_icon_label.setObjectName("switchManagerStatusIcon")
+            self.status_icon_label.setStyleSheet("color: #f2c14e; font-weight: 700;")
+            self.status_text_label = QtWidgets.QLabel("GSV status pending…", status_bar)
+            self.status_text_label.setObjectName("switchManagerStatusText")
+            self.status_text_label.setStyleSheet("color: #9ad8ff; font-weight: 500;")
+            layout.addWidget(self.status_icon_label, 0)
+            layout.addWidget(self.status_text_label, 1)
+            status_bar.setToolTip("Live sync state between this panel and the Global Variables.")
+            self.status_bar = status_bar
+            return status_bar
+
+        def _install_focus_tracking(self) -> None:
+            """Start polling for status changes only when the panel is in focus."""
+
+            if QtCore is None or QtWidgets is None:
+                return
+            if getattr(self, "_focus_tracking_ready", False):
+                return
+            timer = QtCore.QTimer(self)
+            timer.setInterval(1000)
+            timer.timeout.connect(self._update_sync_status)
+            self._status_timer = timer
+            app = QtWidgets.QApplication.instance()
+            if app is not None:
+                try:
+                    app.focusChanged.connect(self._on_focus_changed)  # type: ignore[arg-type]
+                except Exception:
+                    pass
+            self.setFocusPolicy(QtCore.Qt.StrongFocus)
+            self._focus_tracking_ready = True
+
+        def _on_focus_changed(
+            self, _old: Optional[QtWidgets.QWidget], new: Optional[QtWidgets.QWidget]
+        ) -> None:
+            """Start/stop polling when focus enters or leaves the panel."""
+
+            if self._widget_within_panel(new):
+                self._start_status_timer()
+                self._update_sync_status(force=True)
+                return
+            if not self._panel_has_focus():
+                self._stop_status_timer()
+
+        def _widget_within_panel(self, widget: Optional[QtWidgets.QWidget]) -> bool:
+            """Return True when the widget belongs to this panel."""
+
+            if widget is None:
+                return False
+            if widget is self:
+                return True
+            try:
+                return self.isAncestorOf(widget)
+            except Exception:
+                return False
+
+        def _panel_has_focus(self) -> bool:
+            """Return True when the panel (or a child) currently has focus."""
+
+            if QtWidgets is None:
+                return False
+            app = QtWidgets.QApplication.instance()
+            if app is None:
+                return False
+            widget = app.focusWidget()
+            return self._widget_within_panel(widget)
+
+        def _start_status_timer(self) -> None:
+            """Begin periodic status checks."""
+
+            timer = self._status_timer
+            if timer is None:
+                return
+            if timer.isActive():
+                return
+            try:
+                timer.start()
+            except Exception:
+                pass
+
+        def _stop_status_timer(self) -> None:
+            """Stop periodic status checks."""
+
+            timer = self._status_timer
+            if timer is None:
+                return
+            try:
+                timer.stop()
+            except Exception:
+                pass
+
+        def _update_sync_status(self, force: bool = False) -> None:
+            """Refresh the status bar, optionally bypassing the focus gate."""
+
+            if not force and not self._panel_has_focus():
+                return
+            synced = self._gsv_state_matches_ui()
+            if synced != self._is_synced:
+                self._is_synced = synced
+                if synced:
+                    self._render_status_message(True)
+                else:
+                    self._render_status_message(False)
+            elif force:
+                self._render_status_message(synced)
+
+        def _gsv_state_matches_ui(self) -> bool:
+            """Return True when UI variants/options mirror the root GSV."""
+
+            gsv_variants = gsv_utils.discover_list_variants()
+            section_map: Dict[str, VariantSectionWidget] = {}
+            for section in self._section_widgets():
+                name = section.variant_name()
+                options = section.collect_options()
+                if not name and any(options):
+                    return False
+                if name:
+                    if name in section_map:
+                        return False
+                    section_map[name] = section
+            if set(section_map.keys()) != set(gsv_variants.keys()):
+                return False
+            for name, section in section_map.items():
+                ui_options = section.collect_options()
+                if ui_options != gsv_variants.get(name, []):
+                    return False
+                ui_current = (section.current_selection() or "").strip()
+                gsv_current = (gsv_utils.get_variant_value(name) or "").strip()
+                if ui_current != gsv_current:
+                    return False
+            return True
+
+        def _render_status_message(self, synced: bool) -> None:
+            """Update the status icon/text to match the provided state."""
+
+            icon_lbl = getattr(self, "status_icon_label", None)
+            text_lbl = getattr(self, "status_text_label", None)
+            if not isinstance(icon_lbl, QtWidgets.QLabel) or not isinstance(
+                text_lbl, QtWidgets.QLabel
+            ):
+                return
+            if synced:
+                icon_lbl.setText("[OK]")
+                icon_lbl.setStyleSheet("color: #4bc27d; font-weight: 700;")
+                text_lbl.setText("GSV synced")
+                text_lbl.setStyleSheet("color: #4bc27d; font-weight: 600;")
+            else:
+                icon_lbl.setText("[!]")
+                icon_lbl.setStyleSheet("color: #ff6b6b; font-weight: 700;")
+                text_lbl.setText("GSV not synced")
+                text_lbl.setStyleSheet("color: #ff6b6b; font-weight: 600;")
+
+        def _set_sections_locked(self, locked: bool) -> None:
+            """Lock/unlock all variant sections and related controls."""
+
+            locked_flag = bool(locked)
+            self._sections_locked = locked_flag
+            for section in self._section_widgets():
+                section.set_locked(locked_flag)
+            edit_btn = getattr(self, "edit_btn", None)
+            if isinstance(edit_btn, QtWidgets.QPushButton):
+                edit_btn.setEnabled(locked_flag)
+            add_btn = getattr(self, "add_variant_btn", None)
+            if isinstance(add_btn, QtWidgets.QPushButton):
+                add_btn.setEnabled(not locked_flag)
+
         # ----------------------------------------------------------- GSV sync
         def _load_from_gsv(self) -> None:
             """Rebuild the UI from current GSV list variants."""
@@ -955,6 +1158,7 @@ else:
             self._clear_sections()
             if not variants:
                 self._add_variant_section()
+                self._set_sections_locked(False)
                 self._mark_unsynced()
                 return
             for name in sorted(variants.keys()):
@@ -962,6 +1166,7 @@ else:
                 current = gsv_utils.get_variant_value(name)
                 section = self._add_variant_section(name, options, current, locked=True)
                 section.set_locked(True)
+            self._set_sections_locked(True)
             self._mark_synced()
 
         def _install_gsv_callback(self) -> None:
@@ -986,17 +1191,14 @@ else:
             """Update the status label to show a synced state."""
 
             self._is_synced = True
-            self.status_label.setText("GSV synced ✓")
-            self.status_label.setStyleSheet("color: #6dd5b0; font-weight: 600;")
-            for section in self._section_widgets():
-                section.set_locked(True)
+            self._render_status_message(True)
+            self._set_sections_locked(True)
 
         def _mark_unsynced(self) -> None:
             """Update the status label to show the panel needs syncing."""
 
             self._is_synced = False
-            self.status_label.setText("[!] GSV not synced")
-            self.status_label.setStyleSheet("color: #ffb347; font-weight: 600;")
+            self._render_status_message(False)
 
         # -------------------------------------------------------------- Actions
         def _on_sync(self) -> None:
@@ -1026,9 +1228,8 @@ else:
         def _on_edit(self) -> None:
             """Unlock all variant sections for editing."""
 
-            for section in self._section_widgets():
-                section.set_locked(False)
-            self._mark_unsynced()
+            self._set_sections_locked(False)
+            self._update_sync_status(force=True)
 
         def _on_wrap(self) -> None:
             """Wrap the selected Write/Group with a VariableGroup."""
@@ -1098,5 +1299,3 @@ def set_default_screen_via_ui(name: str) -> bool:
 
 
 __all__ = ["SwitchManagerPanel", "set_default_screen_via_ui"]
-
-
