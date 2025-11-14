@@ -245,8 +245,13 @@ else:
                     self._ensure_minimum_rows()
             finally:
                 self._rows_updating = False
+
+            if not options:
+                self._ensure_minimum_rows()
+
+            current_options = self.collect_options()
             self._refresh_from_rows()
-            self._set_combo_items(options, current_value, emit_signal=emit_signal)
+            self._set_combo_items(current_options, current_value, emit_signal=emit_signal)
 
         def is_syncable(self) -> bool:
             """Return True when the variant contains enough data to sync to GSV."""
