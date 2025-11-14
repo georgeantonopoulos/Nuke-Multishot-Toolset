@@ -825,9 +825,9 @@ else:
             actions_layout.setHorizontalSpacing(8)
             actions_layout.setVerticalSpacing(8)
 
-            self.sync_btn = QtWidgets.QPushButton("Sync Options to GSV", actions)
-            self.edit_btn = QtWidgets.QPushButton("Edit GSV", actions)
-            self.wrap_btn = QtWidgets.QPushButton("Lock Write node to Options", actions)
+            self.sync_btn = QtWidgets.QPushButton("Sync Options", actions)
+            self.edit_btn = QtWidgets.QPushButton("Edit Options", actions)
+            self.wrap_btn = QtWidgets.QPushButton("Lock Options (select Write node)", actions)
 
             self._style_action_button(self.sync_btn, role="primary")
             self._style_action_button(self.edit_btn, role="secondary")
